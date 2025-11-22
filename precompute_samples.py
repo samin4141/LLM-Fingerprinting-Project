@@ -7,6 +7,7 @@ experiment much faster (especially on CPU).
 
 Usage:
     python precompute_samples.py
+    python precompute_samples.py --extend  # Extend existing samples to N_MAX
 """
 
 import os
@@ -78,10 +79,11 @@ def precompute_samples(output_dir: str = None, batch_size: int = 32):
         max_new_tokens=config.B_MAX_NEW_TOKENS,
         device=config.DEVICE,
         generator=generator,
-        batch_size=batch_size
+        batch_size=batch_size,
+        show_progress=True
     )
     c1_time = time.time() - t1
-    print(f"✓ C1 sampling completed in {c1_time:.1f} seconds ({c1_time/config.N_MAX*1000:.2f} ms per sample)")
+    print(f"\n✓ C1 sampling completed: {c1_time:.1f} seconds total ({c1_time/config.N_MAX*1000:.2f} ms per sample)")
     
     # Sample for context C2
     print("\n" + "=" * 70)
@@ -101,10 +103,11 @@ def precompute_samples(output_dir: str = None, batch_size: int = 32):
         max_new_tokens=config.B_MAX_NEW_TOKENS,
         device=config.DEVICE,
         generator=generator,
-        batch_size=batch_size
+        batch_size=batch_size,
+        show_progress=True
     )
     c2_time = time.time() - t2
-    print(f"✓ C2 sampling completed in {c2_time:.1f} seconds ({c2_time/config.N_MAX*1000:.2f} ms per sample)")
+    print(f"\n✓ C2 sampling completed: {c2_time:.1f} seconds total ({c2_time/config.N_MAX*1000:.2f} ms per sample)")
     
     # Save samples
     print("\n" + "=" * 70)
@@ -130,6 +133,7 @@ def precompute_samples(output_dir: str = None, batch_size: int = 32):
         "top_k": config.B_TOP_K,
         "top_p": config.B_TOP_P,
         "random_seed": config.GLOBAL_SEED,
+        "batch_size": batch_size,
         "prompt_C1": config.PROMPT_C1,
         "prompt_C2": config.PROMPT_C2,
         "num_samples_C1": len(samples_C1),
@@ -177,9 +181,84 @@ def precompute_samples(output_dir: str = None, batch_size: int = 32):
     print("PRECOMPUTATION COMPLETE")
     print("=" * 70)
     print(f"Total time: {total_time:.1f} seconds ({total_time/60:.1f} minutes)")
+    print(f"  - Model loading: {load_time:.1f} seconds")
+    print(f"  - C1 sampling: {c1_time:.1f} seconds")
+    print(f"  - C2 sampling: {c2_time:.1f} seconds")
+    print(f"  - Saving: {total_time - load_time - c1_time - c2_time:.1f} seconds")
     print(f"\nSamples saved to: {output_dir}")
     print("\nYou can now run experiment_phase1.py - it will use these precomputed samples.")
     print()
+
+
+def extend_samples(
+    current_samples_C1: np.ndarray,
+    current_samples_C2: np.ndarray,
+    target_N: int,
+    model,
+    tokenizer,
+    generator: torch.Generator,
+    batch_size: int = 32
+):
+    """
+    Extend existing samples to a larger N.
+    
+    Args:
+        current_samples_C1: Existing samples for C1
+        current_samples_C2: Existing samples for C2
+        target_N: Target number of samples (must be >= current length)
+        model: The language model
+        tokenizer: The tokenizer
+        generator: Random generator
+        batch_size: Batch size for generation
+    
+    Returns:
+        Tuple of (extended_samples_C1, extended_samples_C2)
+    """
+    current_N = len(current_samples_C1)
+    if target_N <= current_N:
+        print(f"Target N ({target_N}) <= current N ({current_N}). No extension needed.")
+        return current_samples_C1, current_samples_C2
+    
+    additional_samples = target_N - current_N
+    print(f"Extending samples from {current_N} to {target_N} (adding {additional_samples} samples)...")
+    
+    # Extend C1
+    print(f"\nExtending C1 samples...")
+    new_samples_C1 = sample_next_tokens_batched(
+        model=model,
+        tokenizer=tokenizer,
+        prompt=config.PROMPT_C1,
+        num_samples=additional_samples,
+        temperature=config.B_TEMPERATURE,
+        top_k=config.B_TOP_K,
+        top_p=config.B_TOP_P,
+        max_new_tokens=config.B_MAX_NEW_TOKENS,
+        device=config.DEVICE,
+        generator=generator,
+        batch_size=batch_size,
+        show_progress=True
+    )
+    extended_C1 = np.concatenate([current_samples_C1, np.array(new_samples_C1, dtype=np.int32)])
+    
+    # Extend C2
+    print(f"\nExtending C2 samples...")
+    new_samples_C2 = sample_next_tokens_batched(
+        model=model,
+        tokenizer=tokenizer,
+        prompt=config.PROMPT_C2,
+        num_samples=additional_samples,
+        temperature=config.B_TEMPERATURE,
+        top_k=config.B_TOP_K,
+        top_p=config.B_TOP_P,
+        max_new_tokens=config.B_MAX_NEW_TOKENS,
+        device=config.DEVICE,
+        generator=generator,
+        batch_size=batch_size,
+        show_progress=True
+    )
+    extended_C2 = np.concatenate([current_samples_C2, np.array(new_samples_C2, dtype=np.int32)])
+    
+    return extended_C1, extended_C2
 
 
 def load_precomputed_samples(output_dir: str = None):
@@ -211,5 +290,36 @@ def load_precomputed_samples(output_dir: str = None):
 
 
 if __name__ == "__main__":
-    precompute_samples()
+    import sys
+    
+    # Check if we're extending existing samples
+    if len(sys.argv) > 1 and sys.argv[1] == "--extend":
+        # Load existing samples
+        print("Loading existing samples...")
+        samples_C1, samples_C2 = load_precomputed_samples(config.OUTPUT_DIR)
+        print(f"Current samples: {len(samples_C1)} for C1, {len(samples_C2)} for C2")
+        
+        # Load model
+        print("\nLoading model...")
+        model, tokenizer = load_model_and_tokenizer(config.MODEL_NAME, config.DEVICE)
+        
+        # Initialize generator
+        generator = torch.Generator(device=config.DEVICE)
+        generator.manual_seed(config.GLOBAL_SEED)
+        
+        # Extend to N_MAX
+        extended_C1, extended_C2 = extend_samples(
+            samples_C1, samples_C2, config.N_MAX,
+            model, tokenizer, generator
+        )
+        
+        # Save extended samples
+        output_dir = config.OUTPUT_DIR
+        np_path_C1 = os.path.join(output_dir, "samples_C1.npy")
+        np_path_C2 = os.path.join(output_dir, "samples_C2.npy")
+        np.save(np_path_C1, extended_C1)
+        np.save(np_path_C2, extended_C2)
+        print(f"\n✓ Extended samples saved to {output_dir}")
+    else:
+        precompute_samples()
 

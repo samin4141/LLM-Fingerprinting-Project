@@ -130,7 +130,8 @@ def sample_next_tokens_batched(
     max_new_tokens: int = 1,
     device: str = "cpu",
     generator: Optional[torch.Generator] = None,
-    batch_size: int = 32
+    batch_size: int = 32,
+    show_progress: bool = True
 ) -> List[int]:
     """
     Sample multiple next tokens using batched generation (much faster than individual calls).
@@ -147,10 +148,13 @@ def sample_next_tokens_batched(
         device: Device to run on
         generator: Optional random generator for reproducibility
         batch_size: Number of samples to generate per batch
+        show_progress: Whether to print progress updates
     
     Returns:
         List of sampled token IDs (length = num_samples)
     """
+    import time
+    
     # Tokenize prompt once
     prompt_inputs = tokenizer(prompt, return_tensors="pt", padding=True)
     prompt_inputs = {k: v.to(device) for k, v in prompt_inputs.items()}
@@ -160,10 +164,13 @@ def sample_next_tokens_batched(
     batch_attention_mask = prompt_inputs['attention_mask'].repeat(batch_size, 1)
     
     all_token_ids = []
+    num_batches = (num_samples + batch_size - 1) // batch_size
+    batch_start_time = time.time()
+    total_start_time = time.time()
     
     # Generate in batches
     with torch.no_grad():
-        for batch_start in range(0, num_samples, batch_size):
+        for batch_idx, batch_start in enumerate(range(0, num_samples, batch_size), 1):
             # Determine actual batch size for last batch
             current_batch_size = min(batch_size, num_samples - batch_start)
             
@@ -178,6 +185,7 @@ def sample_next_tokens_batched(
             }
             
             # Generate batch
+            batch_gen_start = time.time()
             outputs = model.generate(
                 **batch_inputs,
                 max_new_tokens=max_new_tokens,
@@ -188,10 +196,31 @@ def sample_next_tokens_batched(
                 pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
                 generator=generator
             )
+            batch_gen_time = time.time() - batch_gen_start
             
             # Extract the last token from each sequence in the batch
             batch_token_ids = outputs[:, -1].cpu().tolist()
             all_token_ids.extend(batch_token_ids)
+            
+            # Progress reporting
+            if show_progress:
+                samples_done = len(all_token_ids)
+                elapsed_total = time.time() - total_start_time
+                avg_time_per_sample = elapsed_total / samples_done
+                remaining_samples = num_samples - samples_done
+                eta_seconds = avg_time_per_sample * remaining_samples
+                
+                print(f"  Batch {batch_idx}/{num_batches}: {samples_done}/{num_samples} samples | "
+                      f"Batch time: {batch_gen_time:.2f}s | "
+                      f"Total: {elapsed_total:.1f}s | "
+                      f"Avg: {avg_time_per_sample*1000:.1f}ms/sample | "
+                      f"ETA: {eta_seconds/60:.1f}min", end='\r')
+    
+    if show_progress:
+        total_time = time.time() - total_start_time
+        print()  # New line after progress
+        print(f"  Completed {num_samples} samples in {total_time:.1f} seconds "
+              f"({total_time/num_samples*1000:.2f} ms per sample)")
     
     return all_token_ids
 

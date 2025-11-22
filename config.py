@@ -33,14 +33,15 @@ class Config:
     
     # Sample sizes for convergence analysis
     # Start with smaller sizes for testing, then increase for full experiment
-    # Full experiment: [100, 1000, 5000, 10000, 20000]
-    # Quick test: [100, 500, 1000, 2000, 5000]
-    SAMPLE_SIZES: List[int] = None  # Will be set to [100, 500, 1000, 2000, 5000] for initial testing
+    # Full experiment: [100, 1000, 5000, 10000]
+    # Quick test: [100, 500] - use this to test with 500 samples first
+    # Then change to: [100, 500, 1000, 2000, 5000, 10000] for full run
+    SAMPLE_SIZES: List[int] = None  # Will be set to [100, 500] for initial testing
     REPEATS_PER_N: int = 1  # Number of independent runs per N
     
     # Maximum sample size for precomputation
     # Samples are generated once and reused for all smaller N values
-    N_MAX: int = 20000  # Maximum number of samples to precompute per context
+    N_MAX: int = 10000  # Maximum number of samples to precompute per context
     
     # Random seed for reproducibility
     GLOBAL_SEED: int = 42
@@ -51,9 +52,9 @@ class Config:
     def __post_init__(self):
         """Set default values for mutable fields"""
         if self.SAMPLE_SIZES is None:
-            # Start with smaller sizes for initial testing
-            # Increase to [100, 1000, 5000, 10000, 20000] for full experiment
-            self.SAMPLE_SIZES = [100, 500, 1000, 2000, 5000]
+            # Start with smaller sizes for initial testing (500 samples)
+            # After testing, change to [100, 500, 1000, 2000, 5000, 10000] for full experiment
+            self.SAMPLE_SIZES = [100, 500]
     
     def get_token_ids(self) -> List[int]:
         """Get list of token IDs to track"""
