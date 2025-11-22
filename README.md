@@ -10,6 +10,7 @@ This project implements Phase 1 of an LLM fingerprinting experiment to empirical
 ├── model_loader.py           # Model and tokenizer loading utilities
 ├── decoder.py                # White-box logits and black-box sampling
 ├── estimators.py             # Temperature and logit-bias estimation functions
+├── precompute_samples.py     # Precompute and store samples (run once)
 ├── experiment_phase1.py      # Main experiment orchestration script
 ├── analysis_phase1.py        # Results analysis and plotting
 ├── inspect_tokens.py         # Helper script to find appropriate token IDs
@@ -20,6 +21,8 @@ This project implements Phase 1 of an LLM fingerprinting experiment to empirical
 ## Setup
 
 1. **Install dependencies:**
+   
+   **For CPU-only:**
    ```bash
    pip install -r requirements.txt
    ```
@@ -43,19 +46,36 @@ This project implements Phase 1 of an LLM fingerprinting experiment to empirical
 
 ## Running the Experiment
 
-1. **Run the main experiment:**
+The experiment uses a two-step process to optimize performance:
+
+1. **Precompute samples (run once):**
+   ```bash
+   python precompute_samples.py
+   ```
+   
+   This will:
+   - Load the Mistral-7B model
+   - Sample N_MAX tokens (default: 20,000) for each context using batched generation
+   - Store samples to disk as `.npy` files
+   - This is the slow step (especially on CPU), but only needs to be done once
+   
+   **Note:** The samples are reused for all smaller N values, making subsequent runs very fast.
+
+2. **Run the main experiment:**
    ```bash
    python experiment_phase1.py
    ```
    
    This will:
-   - Load the Mistral-7B model
-   - Pre-compute logits from model A (white-box)
-   - Run sampling experiments for different sample sizes N
+   - Load the precomputed samples from disk
+   - Load the model to compute logits from model A (white-box)
+   - For each sample size N, use the first N samples to compute counts
    - Estimate temperature T and logit-bias difference Δb
    - Save results to `results_phase1/convergence_results.csv` and `.json`
+   
+   **Note:** This step is now very fast since it just counts tokens from precomputed data.
 
-2. **Analyze results:**
+3. **Analyze results:**
    ```bash
    python analysis_phase1.py
    ```
@@ -78,7 +98,8 @@ Key parameters in `config.py`:
 - **PROMPT_C1, PROMPT_C2**: The two context prompts
 - **B_TEMPERATURE**: Temperature for black-box model B (default: 0.8)
 - **B_TOP_K, B_TOP_P**: Decoding parameters for model B
-- **SAMPLE_SIZES**: List of sample sizes N to test (default: [100, 1000, 5000, 10000, 20000])
+- **SAMPLE_SIZES**: List of sample sizes N to test (default: [100, 500, 1000, 2000, 5000])
+- **N_MAX**: Maximum number of samples to precompute per context (default: 20000)
 - **GLOBAL_SEED**: Random seed for reproducibility (default: 42)
 
 ## Expected Results
@@ -118,9 +139,13 @@ Solution:
 ## Notes
 
 - The experiment assumes you have Mistral-7B available locally (cached by HuggingFace)
-- For large sample sizes, the experiment may take significant time
+- **Sampling is done once**: `precompute_samples.py` generates all samples upfront, then `experiment_phase1.py` reuses them for all N values
+- This makes the experiment much faster, especially on CPU where sampling is slow
 - Results are saved incrementally, so you can stop and resume if needed
-- Make sure you have sufficient GPU memory if using CUDA
+- **Device detection is automatic**: The code will use CUDA if available, otherwise CPU
+- Make sure you have sufficient GPU memory if using CUDA (Mistral-7B needs ~14GB VRAM)
+- All paths are relative, so the code will work when cloned to any directory
+- **Reusing samples is valid** as long as you don't change the model, decoding parameters, or prompts
 
 ## Troubleshooting
 
@@ -134,6 +159,11 @@ Solution:
 
 3. **Slow execution:**
    - Use CUDA if available (much faster)
-   - Reduce `SAMPLE_SIZES` for initial testing
-   - The experiment is designed to be run once and results analyzed separately
+   - The sampling step (`precompute_samples.py`) is the slow part - run it once and reuse
+   - The experiment step (`experiment_phase1.py`) is now very fast since it just counts tokens
+   - Reduce `N_MAX` in config.py for initial testing if needed
+
+4. **"Precomputed samples not found" error:**
+   - Run `precompute_samples.py` first before running `experiment_phase1.py`
+   - Make sure `N_MAX` in config.py is >= max(SAMPLE_SIZES)
 

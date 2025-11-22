@@ -38,6 +38,10 @@ class Config:
     SAMPLE_SIZES: List[int] = None  # Will be set to [100, 500, 1000, 2000, 5000] for initial testing
     REPEATS_PER_N: int = 1  # Number of independent runs per N
     
+    # Maximum sample size for precomputation
+    # Samples are generated once and reused for all smaller N values
+    N_MAX: int = 20000  # Maximum number of samples to precompute per context
+    
     # Random seed for reproducibility
     GLOBAL_SEED: int = 42
     

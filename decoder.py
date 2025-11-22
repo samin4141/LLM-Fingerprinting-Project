@@ -118,3 +118,80 @@ def sample_next_token_id_black_box(
     
     return generated_token_id
 
+
+def sample_next_tokens_batched(
+    model: AutoModelForCausalLM,
+    tokenizer: AutoTokenizer,
+    prompt: str,
+    num_samples: int,
+    temperature: float,
+    top_k: int,
+    top_p: float,
+    max_new_tokens: int = 1,
+    device: str = "cpu",
+    generator: Optional[torch.Generator] = None,
+    batch_size: int = 32
+) -> List[int]:
+    """
+    Sample multiple next tokens using batched generation (much faster than individual calls).
+    
+    Args:
+        model: The language model
+        tokenizer: The tokenizer
+        prompt: Input prompt string
+        num_samples: Total number of samples to generate
+        temperature: Sampling temperature
+        top_k: Top-k sampling parameter
+        top_p: Top-p (nucleus) sampling parameter
+        max_new_tokens: Maximum number of new tokens to generate
+        device: Device to run on
+        generator: Optional random generator for reproducibility
+        batch_size: Number of samples to generate per batch
+    
+    Returns:
+        List of sampled token IDs (length = num_samples)
+    """
+    # Tokenize prompt once
+    prompt_inputs = tokenizer(prompt, return_tensors="pt", padding=True)
+    prompt_inputs = {k: v.to(device) for k, v in prompt_inputs.items()}
+    
+    # Replicate prompt for batch
+    batch_prompt_ids = prompt_inputs['input_ids'].repeat(batch_size, 1)
+    batch_attention_mask = prompt_inputs['attention_mask'].repeat(batch_size, 1)
+    
+    all_token_ids = []
+    
+    # Generate in batches
+    with torch.no_grad():
+        for batch_start in range(0, num_samples, batch_size):
+            # Determine actual batch size for last batch
+            current_batch_size = min(batch_size, num_samples - batch_start)
+            
+            if current_batch_size < batch_size:
+                # Last batch might be smaller
+                batch_prompt_ids = prompt_inputs['input_ids'].repeat(current_batch_size, 1)
+                batch_attention_mask = prompt_inputs['attention_mask'].repeat(current_batch_size, 1)
+            
+            batch_inputs = {
+                'input_ids': batch_prompt_ids[:current_batch_size],
+                'attention_mask': batch_attention_mask[:current_batch_size]
+            }
+            
+            # Generate batch
+            outputs = model.generate(
+                **batch_inputs,
+                max_new_tokens=max_new_tokens,
+                do_sample=True,
+                temperature=temperature,
+                top_k=top_k,
+                top_p=top_p,
+                pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+                generator=generator
+            )
+            
+            # Extract the last token from each sequence in the batch
+            batch_token_ids = outputs[:, -1].cpu().tolist()
+            all_token_ids.extend(batch_token_ids)
+    
+    return all_token_ids
+

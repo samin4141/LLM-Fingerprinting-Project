@@ -1,3 +1,8 @@
+# Core dependencies
+# Note: For CUDA support, install PyTorch separately first:
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+# Then install the rest: pip install -r requirements.txt
+
 torch>=2.0.0
 transformers>=4.30.0
 matplotlib>=3.7.0

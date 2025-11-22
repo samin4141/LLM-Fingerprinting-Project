@@ -13,101 +13,61 @@ import time
 
 from config import config
 from model_loader import load_model_and_tokenizer
-from decoder import get_logits_for_tokens, sample_next_token_id_black_box
+from decoder import get_logits_for_tokens
 from estimators import estimate_T_and_delta_b, estimate_T_and_delta_b_ac
+from precompute_samples import load_precomputed_samples
+import numpy as np
 
 
 def run_experiment_for_N(
-    model,
-    tokenizer,
     N: int,
+    samples_C1: np.ndarray,
+    samples_C2: np.ndarray,
     logits_C1: Dict[int, float],
-    logits_C2: Dict[int, float],
-    device: str,
-    generator: torch.Generator
+    logits_C2: Dict[int, float]
 ) -> Dict:
     """
-    Run the experiment for a given sample size N.
+    Run the experiment for a given sample size N using precomputed samples.
     
     Args:
-        model: The language model
-        tokenizer: The tokenizer
-        N: Number of samples to collect
+        N: Number of samples to use (takes first N from precomputed samples)
+        samples_C1: Precomputed samples for context C1
+        samples_C2: Precomputed samples for context C2
         logits_C1: Dictionary of token_id -> logit for context C1
         logits_C2: Dictionary of token_id -> logit for context C2
-        device: Device to run on
-        generator: Random generator for reproducibility
     
     Returns:
         Dictionary with estimation results
     """
+    if N > len(samples_C1) or N > len(samples_C2):
+        raise ValueError(
+            f"Requested N={N} exceeds precomputed samples "
+            f"(C1: {len(samples_C1)}, C2: {len(samples_C2)}). "
+            f"Please run precompute_samples.py with N_MAX >= {N}."
+        )
+    
     token_a = config.TOKEN_A_ID
     token_b = config.TOKEN_B_ID
     token_c = config.TOKEN_C_ID
     
-    # Initialize counters
-    n_a_C1 = n_b_C1 = n_c_C1 = 0
-    n_a_C2 = n_b_C2 = n_c_C2 = 0
-    
-    print(f"  Collecting {N} samples for each context...")
+    print(f"  Using first {N} samples from precomputed data...")
     start_time = time.time()
     
-    # Sample from context C1
-    for i in range(N):
-        token_id = sample_next_token_id_black_box(
-            model=model,
-            tokenizer=tokenizer,
-            prompt=config.PROMPT_C1,
-            temperature=config.B_TEMPERATURE,
-            top_k=config.B_TOP_K,
-            top_p=config.B_TOP_P,
-            max_new_tokens=config.B_MAX_NEW_TOKENS,
-            device=device,
-            generator=generator
-        )
-        
-        if token_id == token_a:
-            n_a_C1 += 1
-        elif token_id == token_b:
-            n_b_C1 += 1
-        elif token_id == token_c:
-            n_c_C1 += 1
-        
-        # Progress update for large N
-        if (i + 1) % max(1, N // 10) == 0:
-            print(f"    C1: {i+1}/{N} samples", end='\r')
+    # Take first N samples
+    sample_subset_C1 = samples_C1[:N]
+    sample_subset_C2 = samples_C2[:N]
     
-    print(f"    C1: {N}/{N} samples completed")
+    # Count occurrences using numpy (much faster than loops)
+    n_a_C1 = np.sum(sample_subset_C1 == token_a)
+    n_b_C1 = np.sum(sample_subset_C1 == token_b)
+    n_c_C1 = np.sum(sample_subset_C1 == token_c)
     
-    # Sample from context C2
-    for i in range(N):
-        token_id = sample_next_token_id_black_box(
-            model=model,
-            tokenizer=tokenizer,
-            prompt=config.PROMPT_C2,
-            temperature=config.B_TEMPERATURE,
-            top_k=config.B_TOP_K,
-            top_p=config.B_TOP_P,
-            max_new_tokens=config.B_MAX_NEW_TOKENS,
-            device=device,
-            generator=generator
-        )
-        
-        if token_id == token_a:
-            n_a_C2 += 1
-        elif token_id == token_b:
-            n_b_C2 += 1
-        elif token_id == token_c:
-            n_c_C2 += 1
-        
-        # Progress update for large N
-        if (i + 1) % max(1, N // 10) == 0:
-            print(f"    C2: {i+1}/{N} samples", end='\r')
-    
-    print(f"    C2: {N}/{N} samples completed")
+    n_a_C2 = np.sum(sample_subset_C2 == token_a)
+    n_b_C2 = np.sum(sample_subset_C2 == token_b)
+    n_c_C2 = np.sum(sample_subset_C2 == token_c)
     
     elapsed = time.time() - start_time
-    print(f"  Sampling completed in {elapsed:.2f} seconds")
+    print(f"  Count computation completed in {elapsed:.4f} seconds")
     
     # Compute estimates using (a, b) pair
     T_hat_ab, delta_b_hat_ab = estimate_T_and_delta_b(
@@ -202,7 +162,28 @@ def main():
         print("You can inspect the tokenizer to find appropriate token IDs.")
         return
     
-    # Load model and tokenizer
+    # Load precomputed samples
+    print("Loading precomputed samples...")
+    try:
+        samples_C1, samples_C2 = load_precomputed_samples(config.OUTPUT_DIR)
+        print(f"✓ Loaded {len(samples_C1)} samples for C1")
+        print(f"✓ Loaded {len(samples_C2)} samples for C2")
+    except FileNotFoundError as e:
+        print(f"\nERROR: {e}")
+        print("\nPlease run precompute_samples.py first to generate samples.")
+        return
+    print()
+    
+    # Check that N_MAX is sufficient
+    max_N = max(config.SAMPLE_SIZES)
+    if max_N > len(samples_C1) or max_N > len(samples_C2):
+        print(f"WARNING: Maximum requested N ({max_N}) exceeds precomputed samples.")
+        print(f"Precomputed: {len(samples_C1)} samples")
+        print(f"Please run precompute_samples.py with N_MAX >= {max_N}")
+        return
+    
+    # Load model and tokenizer (needed for logits and tokenizer.decode)
+    print("Loading model for logit computation...")
     model, tokenizer = load_model_and_tokenizer(config.MODEL_NAME, config.DEVICE)
     print()
     
@@ -237,12 +218,6 @@ def main():
         print(f"  Token {tid} ({token_str}): {logit:.4f}")
     print()
     
-    # Initialize random generator for reproducibility
-    # Using a single generator ensures reproducible results across runs
-    # For REPEATS_PER_N > 1 with independent repeats, consider reseeding per repeat
-    generator = torch.Generator(device=config.DEVICE)
-    generator.manual_seed(config.GLOBAL_SEED)
-    
     # Run experiment for each sample size
     results = []
     
@@ -260,13 +235,11 @@ def main():
                 print(f"  Repeat {repeat + 1}/{config.REPEATS_PER_N}")
             
             result = run_experiment_for_N(
-                model=model,
-                tokenizer=tokenizer,
                 N=N,
+                samples_C1=samples_C1,
+                samples_C2=samples_C2,
                 logits_C1=logits_C1,
-                logits_C2=logits_C2,
-                device=config.DEVICE,
-                generator=generator
+                logits_C2=logits_C2
             )
             
             results.append(result)
